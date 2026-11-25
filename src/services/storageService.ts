@@ -1,7 +1,7 @@
 import type { Room, Member, Vote, CandidateDate, EventCriteria } from '../types';
 import { generateRoomToken } from '../lib/rankingEngine';
 
-const STORAGE_KEY_ROOMS = 'janjian_rooms_v1';
+const STORAGE_KEY_ROOMS = 'janjian_rooms_v2';
 const STORAGE_KEY_ACTIVE_USER = 'janjian_active_user_v1';
 
 // Seed sample room based on GDG ITB STACK 2026 Project
@@ -51,10 +51,38 @@ export function createSeedRoom(): Room {
   };
 
   const candidateDates: CandidateDate[] = [
-    { id: 'cd-1', date: makeDateStr(2), label: 'Sesi Evaluasi 1' },
-    { id: 'cd-2', date: makeDateStr(3), label: 'Sesi Evaluasi 2' },
-    { id: 'cd-3', date: makeDateStr(5), label: 'Gladi Bersih Presentasi' },
-    { id: 'cd-4', date: makeDateStr(6), label: 'Finalisasi Demo' },
+    {
+      id: 'cd-1',
+      date: makeDateStr(2),
+      startTime: '14:00',
+      endTime: '16:00',
+      label: 'Sesi Evaluasi 1',
+      description: 'Review progres frontend, backend, dan penyesuaian alur voting tim.',
+    },
+    {
+      id: 'cd-2',
+      date: makeDateStr(3),
+      startTime: '19:00',
+      endTime: '21:00',
+      label: 'Sesi Evaluasi 2',
+      description: 'Diskusi lanjutan integrasi data dan penyempurnaan UI mobile.',
+    },
+    {
+      id: 'cd-3',
+      date: makeDateStr(5),
+      startTime: '15:30',
+      endTime: '17:30',
+      label: 'Gladi Bersih Presentasi',
+      description: 'Simulasi pitch deck 5 menit + Q&A persiapan demo STACK 2026.',
+    },
+    {
+      id: 'cd-4',
+      date: makeDateStr(6),
+      startTime: '10:00',
+      endTime: '12:00',
+      label: 'Finalisasi Demo',
+      description: 'Pengecekan akhir live deployment dan pembagian peran presentasi.',
+    },
   ];
 
   // Initial votes pre-filled for demonstration
@@ -137,8 +165,22 @@ export function createSeedRooms(): Room[] {
       },
     ],
     candidateDates: [
-      { id: 'bem-1', date: makeDateStr(1), label: 'Sesi Awal' },
-      { id: 'bem-2', date: makeDateStr(4), label: 'Rapat Finalisasi' },
+      {
+        id: 'bem-1',
+        date: makeDateStr(1),
+        startTime: '16:00',
+        endTime: '18:00',
+        label: 'Sesi Awal',
+        description: 'Pembagian jobdesc panitia dan timeline pengajuan proposal.',
+      },
+      {
+        id: 'bem-2',
+        date: makeDateStr(4),
+        startTime: '18:30',
+        endTime: '20:30',
+        label: 'Rapat Finalisasi',
+        description: 'Konfirmasi rundown acara, logistik venue, dan anggaran akhir.',
+      },
     ],
     votes: {
       'bem-1': [
@@ -216,7 +258,14 @@ class StorageService {
     name: string;
     description: string;
     adminName: string;
-    candidateDates: { date: string; timeSlot?: CandidateDate['timeSlot']; label?: string }[];
+    candidateDates: {
+      date: string;
+      timeSlot?: CandidateDate['timeSlot'];
+      startTime?: string;
+      endTime?: string;
+      label?: string;
+      description?: string;
+    }[];
     criteria: EventCriteria;
   }): Room {
     const adminId = 'admin-' + Math.random().toString(36).substring(2, 9);
@@ -234,7 +283,10 @@ class StorageService {
       id: `cd-${Date.now()}-${idx}`,
       date: cd.date,
       timeSlot: cd.timeSlot || 'all-day',
+      startTime: cd.startTime,
+      endTime: cd.endTime,
       label: cd.label,
+      description: cd.description,
     }));
 
     const newRoom: Room = {
@@ -304,6 +356,67 @@ class StorageService {
       });
     }
 
+    this.saveToStorage();
+  }
+
+  public addAgenda(
+    token: string,
+    agenda: {
+      date: string;
+      startTime?: string;
+      endTime?: string;
+      timeSlot?: CandidateDate['timeSlot'];
+      label: string;
+      description?: string;
+    }
+  ): CandidateDate | null {
+    const room = this.getRoomByToken(token);
+    if (!room) return null;
+
+    const newAgenda: CandidateDate = {
+      id: `cd-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      date: agenda.date,
+      startTime: agenda.startTime || undefined,
+      endTime: agenda.endTime || undefined,
+      timeSlot: agenda.timeSlot || 'all-day',
+      label: agenda.label.trim() || 'Agenda Baru',
+      description: agenda.description?.trim() || '',
+    };
+
+    room.candidateDates.push(newAgenda);
+    this.saveToStorage();
+    return newAgenda;
+  }
+
+  public updateAgenda(
+    token: string,
+    agendaId: string,
+    updates: Partial<Omit<CandidateDate, 'id'>>
+  ): void {
+    const room = this.getRoomByToken(token);
+    if (!room) return;
+
+    const idx = room.candidateDates.findIndex((cd) => cd.id === agendaId);
+    if (idx === -1) return;
+
+    room.candidateDates[idx] = {
+      ...room.candidateDates[idx],
+      ...updates,
+    };
+    this.saveToStorage();
+  }
+
+  public deleteAgenda(token: string, agendaId: string): void {
+    const room = this.getRoomByToken(token);
+    if (!room) return;
+
+    room.candidateDates = room.candidateDates.filter((cd) => cd.id !== agendaId);
+    delete room.votes[agendaId];
+    if (room.finalizedDateId === agendaId) {
+      room.status = 'VOTING';
+      room.finalizedDateId = undefined;
+      room.finalizedNotes = undefined;
+    }
     this.saveToStorage();
   }
 

@@ -297,7 +297,7 @@ export const AdminApprovalPanel: React.FC<AdminApprovalPanelProps> = ({ room, on
               </div>
               <div>
                 <h3 className="font-bold text-slate-900 text-base">Konfirmasi Jadwal Final</h3>
-                <p className="text-xs text-slate-500">Kirim pengumuman resmi ke seluruh anggota room</p>
+                <p className="text-xs text-slate-500">Kirim pengumuman resmi ke seluruh anggota community</p>
               </div>
             </div>
 

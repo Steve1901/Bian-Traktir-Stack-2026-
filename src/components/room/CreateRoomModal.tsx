@@ -67,7 +67,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
     setError('');
 
     if (!name.trim()) {
-      setError('Nama Room / Organisasi wajib diisi.');
+      setError('Nama Community / Organisasi wajib diisi.');
       return;
     }
     if (!adminName.trim()) {
@@ -109,7 +109,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
               <CalendarPlus className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 text-base">Buat Room Jadwal Baru</h3>
+              <h3 className="font-bold text-slate-900 text-base">Buat Community Baru</h3>
               <p className="text-xs text-slate-500">Mulai penjadwalan kolaboratif berbasis token</p>
             </div>
           </div>
@@ -133,7 +133,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Nama Room / Acara *
+                Nama Community / Acara *
               </label>
               <input
                 type="text"
@@ -299,7 +299,7 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({ isOpen, onClos
               className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold text-sm rounded-xl shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition"
             >
               <ShieldCheck className="w-4 h-4" />
-              <span>Buat Room & Dapatkan Token</span>
+              <span>Buat Community & Dapatkan Token</span>
             </button>
           </div>
         </form>

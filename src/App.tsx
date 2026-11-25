@@ -1,15 +1,8 @@
 import { useState, useEffect } from 'react';
-import {
-  Calendar,
-  CheckCircle,
-  ShieldCheck,
-  Users,
-  Copy,
-  KeyRound,
-} from 'lucide-react';
+import { Users, Copy, KeyRound } from 'lucide-react';
 import type { Room, Member } from './types';
 import { storageService } from './services/storageService';
-import { Navbar } from './components/layout/Navbar';
+import { Navbar, type NavTab } from './components/layout/Navbar';
 import { SharedCalendarView } from './components/calendar/SharedCalendarView';
 import { AdminApprovalPanel } from './components/dashboard/AdminApprovalPanel';
 import { FinalizedEventView } from './components/event/FinalizedEventView';
@@ -21,29 +14,30 @@ export function App() {
   const [room, setRoom] = useState<Room | null>(null);
   const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [activeUser, setActiveUser] = useState<Member | null>(null);
-  const [currentTab, setCurrentTab] = useState<'calendar' | 'admin' | 'finalized' | 'members'>('calendar');
+  const [currentTab, setCurrentTab] = useState<NavTab>('calendar');
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isJoinOpen, setIsJoinOpen] = useState(false);
 
-  // Sync state from storageService
-  const refreshState = () => {
-    const currentRoom = storageService.getRoomByToken(activeToken);
-    setRoom(currentRoom);
+  const isAllMode = activeToken === 'ALL';
 
+  const refreshState = () => {
     const roomsList = storageService.getAllRooms();
     setAllRooms(roomsList);
+
+    const currentRoom = activeToken === 'ALL' ? null : storageService.getRoomByToken(activeToken);
+    setRoom(currentRoom);
 
     const currentUser = storageService.getActiveUser();
     if (currentRoom && currentUser) {
       const match = currentRoom.members.find((m) => m.id === currentUser.id);
-      if (match) {
-        setActiveUser(match);
-      } else {
-        setActiveUser(currentRoom.members[0] || null);
-      }
+      setActiveUser(match || currentRoom.members[0] || null);
     } else if (currentRoom) {
       setActiveUser(currentRoom.members[0] || null);
+    } else if (currentUser) {
+      setActiveUser(currentUser);
+    } else if (roomsList.length > 0) {
+      setActiveUser(roomsList[0].members[0] || null);
     }
   };
 
@@ -55,12 +49,11 @@ export function App() {
     return () => unsubscribe();
   }, [activeToken]);
 
-  // When room status changes to FINALIZED, auto-switch to finalized tab
   useEffect(() => {
-    if (room?.status === 'FINALIZED') {
+    if (!isAllMode && room?.status === 'FINALIZED') {
       setCurrentTab('finalized');
     }
-  }, [room?.status]);
+  }, [room?.status, isAllMode]);
 
   const handleSelectUser = (member: Member) => {
     storageService.setActiveUser(member);
@@ -75,11 +68,14 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans pb-12">
-      {/* Top Navigation: HStack [Janjian, profile (dropdown), rooms (dropdown)] */}
+      {/* Top Navbar with integrated Tabs & Mobile Hamburger */}
       <Navbar
+        activeToken={activeToken}
         room={room}
         allRooms={allRooms}
         activeUser={activeUser}
+        currentTab={currentTab}
+        onSelectTab={setCurrentTab}
         onSelectRoom={(token) => {
           setActiveToken(token);
           setCurrentTab('calendar');
@@ -90,98 +86,41 @@ export function App() {
         onResetDemo={() => {
           storageService.resetDemoData();
           setActiveToken('STACK-ITB');
+          setCurrentTab('calendar');
           refreshState();
         }}
       />
 
-      {/* Main Container - DYNAMIC FULL WIDTH (no max-w hardcoded limits) */}
+      {/* Main Container - Dynamic Full Width */}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-5 space-y-4">
-        {room ? (
+        {isAllMode || room ? (
           <>
-            {/* Compact Tabs Header */}
-            <div className="flex items-center justify-between border-b border-slate-200/80 pb-2.5 flex-wrap gap-2">
-              <div className="flex items-center gap-1 p-1 bg-slate-200/60 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setCurrentTab('calendar')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                    currentTab === 'calendar'
-                      ? 'bg-white text-blue-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span>Kalender & Voting</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setCurrentTab('admin')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                    currentTab === 'admin'
-                      ? 'bg-white text-indigo-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Persetujuan Admin</span>
-                  {room.status === 'VOTING' && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
-                  )}
-                </button>
-
-                {room.status === 'FINALIZED' && (
-                  <button
-                    type="button"
-                    onClick={() => setCurrentTab('finalized')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                      currentTab === 'finalized'
-                        ? 'bg-white text-emerald-700 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Hasil Final</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setCurrentTab('members')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                    currentTab === 'members'
-                      ? 'bg-white text-slate-800 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span>Anggota ({room.members.length})</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Tab Views */}
             {currentTab === 'calendar' && (
-              <SharedCalendarView room={room} activeUser={activeUser} />
+              <SharedCalendarView
+                isAllMode={isAllMode}
+                room={room}
+                allRooms={allRooms}
+                activeUser={activeUser}
+              />
             )}
 
-            {currentTab === 'admin' && (
+            {!isAllMode && room && currentTab === 'admin' && (
               <AdminApprovalPanel room={room} onFinalize={handleFinalize} />
             )}
 
-            {currentTab === 'finalized' && (
+            {!isAllMode && room && currentTab === 'finalized' && (
               <FinalizedEventView room={room} activeUser={activeUser} />
             )}
 
-            {currentTab === 'members' && (
+            {!isAllMode && room && currentTab === 'members' && (
               <div className="w-full bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs space-y-5">
                 <div>
                   <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                     <Users className="w-4 h-4 text-blue-600" />
-                    <span>Daftar Anggota Room</span>
+                    <span>Daftar Anggota Community</span>
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Gunakan token <strong>{room.token}</strong> untuk mengundang anggota lain ke room ini.
+                    Gunakan token <strong>{room.token}</strong> untuk mengundang anggota lain ke community ini.
                   </p>
                 </div>
 
@@ -191,7 +130,9 @@ export function App() {
                       <KeyRound className="w-4 h-4" />
                     </div>
                     <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Token Room</p>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                        Token Community
+                      </p>
                       <p className="font-mono text-base font-extrabold text-slate-900">{room.token}</p>
                     </div>
                   </div>
@@ -244,7 +185,7 @@ export function App() {
           </>
         ) : (
           <div className="text-center py-16 space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Room Tidak Ditemukan</h2>
+            <h2 className="text-xl font-bold text-slate-800">Community Tidak Ditemukan</h2>
             <button
               type="button"
               onClick={() => {
@@ -254,7 +195,7 @@ export function App() {
               }}
               className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold"
             >
-              Buka Room Default (STACK-ITB)
+              Buka Community Default (STACK-ITB)
             </button>
           </div>
         )}

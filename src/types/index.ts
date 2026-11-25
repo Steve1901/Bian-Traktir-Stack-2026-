@@ -14,10 +14,13 @@ export interface Member {
 }
 
 export interface CandidateDate {
-  id: string; // unique key, e.g. '2026-12-05' or '2026-12-05_morning'
+  id: string; // unique key, e.g. '2026-12-05' or 'cd-123'
   date: string; // ISO date 'YYYY-MM-DD'
   timeSlot?: TimeSlotType;
-  label?: string;
+  startTime?: string; // e.g. '14:00'
+  endTime?: string; // e.g. '16:00'
+  label?: string; // Agenda title
+  description?: string; // Event / Agenda description
 }
 
 export interface Vote {

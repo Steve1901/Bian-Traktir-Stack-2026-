@@ -23,7 +23,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, o
     const name = nameInput.trim();
 
     if (!token) {
-      setError('Masukkan token room yang valid (misal: STACK-ITB).');
+      setError('Masukkan token community yang valid (misal: STACK-ITB).');
       return;
     }
 
@@ -34,7 +34,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, o
 
     const result = storageService.joinRoom(token, name);
     if (!result) {
-      setError(`Room dengan token "${token}" tidak ditemukan. Pastikan token benar.`);
+      setError(`Community dengan token "${token}" tidak ditemukan. Pastikan token benar.`);
       return;
     }
 
@@ -57,7 +57,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, o
               <KeyRound className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 text-base">Masuk ke Room Janjian</h3>
+              <h3 className="font-bold text-slate-900 text-base">Gabung ke Community Janjian</h3>
               <p className="text-xs text-slate-500">Gunakan token unik yang dibagikan admin</p>
             </div>
           </div>
@@ -79,7 +79,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, o
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-              Token Room
+              Token Community
             </label>
             <div className="relative">
               <input
@@ -121,7 +121,7 @@ export const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, o
               type="submit"
               className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white font-semibold text-sm rounded-xl shadow-md shadow-blue-500/20 flex items-center justify-center gap-2 transition"
             >
-              <span>Lanjut ke Kalender Room</span>
+              <span>Lanjut ke Kalender Community</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>

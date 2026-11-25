@@ -18,70 +18,133 @@ import {
   Save,
   Check,
   Info,
+  Clock,
+  Pencil,
+  Trash2,
+  X,
+  AlignLeft,
+  Building2,
 } from 'lucide-react';
-import type { Room, Member, VoteStatus, CandidateDate } from '../../types';
+import type { Room, Member, VoteStatus, CandidateDate, DateRankingResult } from '../../types';
 import { rankCandidateDates, formatDateDisplay } from '../../lib/rankingEngine';
 import { storageService } from '../../services/storageService';
 import { downloadIcsFile, getGoogleCalendarUrl } from '../../lib/calendarExport';
 
-interface SharedCalendarViewProps {
+interface AgendaEntry {
   room: Room;
+  candidate: CandidateDate;
+  rankInfo?: DateRankingResult;
+}
+
+interface SharedCalendarViewProps {
+  isAllMode: boolean;
+  room: Room | null;
+  allRooms: Room[];
   activeUser: Member | null;
 }
 
-export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, activeUser }) => {
-  // Determine initial month from candidate dates or today
+export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({
+  isAllMode,
+  room,
+  allRooms,
+  activeUser,
+}) => {
+  const displayedRooms = useMemo(() => {
+    if (isAllMode) return allRooms;
+    return room ? [room] : [];
+  }, [isAllMode, room, allRooms]);
+
+  // Build agenda entries across all displayed communities
+  const agendaEntries = useMemo<AgendaEntry[]>(() => {
+    const entries: AgendaEntry[] = [];
+    displayedRooms.forEach((r) => {
+      const ranked = rankCandidateDates(r);
+      const rankMap = new Map(ranked.map((res) => [res.dateId, res]));
+      r.candidateDates.forEach((cd) => {
+        entries.push({
+          room: r,
+          candidate: cd,
+          rankInfo: rankMap.get(cd.id),
+        });
+      });
+    });
+    return entries;
+  }, [displayedRooms]);
+
+  // Group agenda entries by date 'YYYY-MM-DD'
+  const agendasByDateStr = useMemo(() => {
+    const map = new Map<string, AgendaEntry[]>();
+    agendaEntries.forEach((entry) => {
+      const list = map.get(entry.candidate.date) || [];
+      list.push(entry);
+      map.set(entry.candidate.date, list);
+    });
+    return map;
+  }, [agendaEntries]);
+
+  // Initial calendar month
   const initialDate = useMemo(() => {
-    if (room.candidateDates.length > 0) {
-      const first = room.candidateDates[0].date;
+    if (agendaEntries.length > 0) {
+      const first = agendaEntries[0].candidate.date;
       const [y, m] = first.split('-').map(Number);
       return new Date(y, m - 1, 1);
     }
     return new Date();
-  }, [room.candidateDates]);
+  }, [agendaEntries.length]);
 
   const [currentMonthDate, setCurrentMonthDate] = useState<Date>(initialDate);
 
-  // Selected date defaults to first candidate date (or today)
+  // Selected date string
   const [selectedDateStr, setSelectedDateStr] = useState<string>(() => {
-    if (room.candidateDates.length > 0) {
-      if (room.status === 'FINALIZED' && room.finalizedDateId) {
-        const fin = room.candidateDates.find((cd) => cd.id === room.finalizedDateId);
-        if (fin) return fin.date;
-      }
-      return room.candidateDates[0].date;
+    if (agendaEntries.length > 0) {
+      const finalized = agendaEntries.find(
+        (e) => e.room.status === 'FINALIZED' && e.room.finalizedDateId === e.candidate.id
+      );
+      if (finalized) return finalized.candidate.date;
+      return agendaEntries[0].candidate.date;
     }
     return new Date().toISOString().split('T')[0];
   });
 
-  // Requirement 4: Draft voting selection (does NOT update room state until confirmed)
+  // If multiple agendas exist on the same date, track which one is selected
+  const [selectedAgendaId, setSelectedAgendaId] = useState<string | null>(null);
+
+  const agendasOnSelectedDate = agendasByDateStr.get(selectedDateStr) || [];
+
+  const activeAgendaEntry: AgendaEntry | null = useMemo(() => {
+    if (agendasOnSelectedDate.length === 0) return null;
+    if (selectedAgendaId) {
+      const found = agendasOnSelectedDate.find((e) => e.candidate.id === selectedAgendaId);
+      if (found) return found;
+    }
+    return agendasOnSelectedDate[0];
+  }, [agendasOnSelectedDate, selectedAgendaId]);
+
+  // Draft voting state (does NOT update room state until confirmed)
   const [draftVote, setDraftVote] = useState<VoteStatus | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isSavedFeedback, setIsSavedFeedback] = useState(false);
 
-  const rankedResults = rankCandidateDates(room);
-  const rankingMap = useMemo(() => {
-    return new Map(rankedResults.map((r) => [r.dateId, r]));
-  }, [rankedResults]);
+  // Agenda CRUD Modal state
+  const [crudModalOpen, setCrudModalOpen] = useState(false);
+  const [crudMode, setCrudMode] = useState<'create' | 'edit'>('create');
+  const [editingEntry, setEditingEntry] = useState<AgendaEntry | null>(null);
+  const [formCommunityToken, setFormCommunityToken] = useState<string>('');
+  const [formTitle, setFormTitle] = useState('');
+  const [formDate, setFormDate] = useState('');
+  const [formStartTime, setFormStartTime] = useState('14:00');
+  const [formEndTime, setFormEndTime] = useState('16:00');
+  const [formDescription, setFormDescription] = useState('');
 
-  // Map of candidate dates keyed by 'YYYY-MM-DD'
-  const candidateByDateStr = useMemo(() => {
-    const map = new Map<string, CandidateDate>();
-    room.candidateDates.forEach((cd) => map.set(cd.date, cd));
-    return map;
-  }, [room.candidateDates]);
+  const activeVotes = activeAgendaEntry
+    ? activeAgendaEntry.room.votes[activeAgendaEntry.candidate.id] || []
+    : [];
 
-  // Current selected candidate if applicable
-  const selectedCandidate = candidateByDateStr.get(selectedDateStr) || null;
-  const selectedRankInfo = selectedCandidate ? rankingMap.get(selectedCandidate.id) : null;
-  const selectedVotes = selectedCandidate ? (room.votes[selectedCandidate.id] || []) : [];
-  
-  // Committed vote from storage
-  const committedUserVote = activeUser && selectedCandidate
-    ? selectedVotes.find((v) => v.memberId === activeUser.id)
-    : null;
+  const committedUserVote =
+    activeUser && activeAgendaEntry
+      ? activeVotes.find((v) => v.memberId === activeUser.id)
+      : null;
 
-  // Initialize draft vote when selected date or active user changes
   useEffect(() => {
     if (committedUserVote) {
       setDraftVote(committedUserVote.status);
@@ -89,13 +152,21 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
       setDraftVote(null);
     }
     setIsSavedFeedback(false);
-  }, [selectedDateStr, activeUser?.id, committedUserVote?.status]);
+  }, [selectedDateStr, activeAgendaEntry?.candidate.id, activeUser?.id, committedUserVote?.status]);
 
-  const isFinalizedWinner = (candidate: CandidateDate) => {
-    return room.status === 'FINALIZED' && room.finalizedDateId === candidate.id;
-  };
+  const isFinalizedWinner = (entry: AgendaEntry) =>
+    entry.room.status === 'FINALIZED' && entry.room.finalizedDateId === entry.candidate.id;
 
-  const isSelectedApprovedWinner = selectedCandidate ? isFinalizedWinner(selectedCandidate) : false;
+  const isSelectedApprovedWinner = activeAgendaEntry ? isFinalizedWinner(activeAgendaEntry) : false;
+
+  // Members to show in left panel
+  const panelMembers = useMemo(() => {
+    if (activeAgendaEntry) return activeAgendaEntry.room.members;
+    if (!isAllMode && room) return room.members;
+    const map = new Map<string, Member>();
+    allRooms.forEach((r) => r.members.forEach((m) => map.set(m.id, m)));
+    return Array.from(map.values());
+  }, [activeAgendaEntry, isAllMode, room, allRooms]);
 
   // Month navigation
   const prevMonth = () => {
@@ -106,24 +177,34 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
     setCurrentMonthDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
   };
 
-  // Calendar matrix calculation (Monday-first: Mon=0, Tue=1, ... Sun=6)
   const year = currentMonthDate.getFullYear();
   const month = currentMonthDate.getMonth();
-  const monthName = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(currentMonthDate);
+  const monthName = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(
+    currentMonthDate
+  );
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7;
 
-  // Requirement 4: Commit draft vote to storageService when user explicitly saves or confirms via details dropdown
   const handleCommitVote = () => {
-    if (!activeUser || !selectedCandidate || !draftVote) return;
-    storageService.submitVote(room.token, activeUser.id, activeUser.name, selectedCandidate.id, draftVote);
+    if (!activeUser || !activeAgendaEntry || !draftVote) return;
+    storageService.submitVote(
+      activeAgendaEntry.room.token,
+      activeUser.id,
+      activeUser.name,
+      activeAgendaEntry.candidate.id,
+      draftVote
+    );
     setIsSavedFeedback(true);
     setTimeout(() => setIsSavedFeedback(false), 2500);
   };
 
-  const handleApproveDate = (candidate: CandidateDate) => {
-    storageService.finalizeSchedule(room.token, candidate.id, 'Disetujui langsung melalui Kalender');
+  const handleApproveDate = (entry: AgendaEntry) => {
+    storageService.finalizeSchedule(
+      entry.room.token,
+      entry.candidate.id,
+      'Disetujui langsung melalui Kalender'
+    );
     confetti({
       particleCount: 90,
       spread: 75,
@@ -131,28 +212,90 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
     });
   };
 
-  const handleAddCandidate = (dateStr: string) => {
-    const updatedCandidate: CandidateDate = {
-      id: `cd-${Date.now()}`,
-      date: dateStr,
-      timeSlot: 'all-day',
-      label: `Opsi Baru`,
-    };
-    room.candidateDates.push(updatedCandidate);
-    setSelectedDateStr(dateStr);
+  // CRUD handlers
+  const openCreateModal = (dateOverride?: string) => {
+    setCrudMode('create');
+    setEditingEntry(null);
+    setFormCommunityToken(room ? room.token : allRooms[0]?.token || '');
+    setFormTitle('');
+    setFormDate(dateOverride || selectedDateStr);
+    setFormStartTime('14:00');
+    setFormEndTime('16:00');
+    setFormDescription('');
+    setCrudModalOpen(true);
+  };
+
+  const openEditModal = (entry: AgendaEntry) => {
+    setCrudMode('edit');
+    setEditingEntry(entry);
+    setFormCommunityToken(entry.room.token);
+    setFormTitle(entry.candidate.label || '');
+    setFormDate(entry.candidate.date);
+    setFormStartTime(entry.candidate.startTime || '');
+    setFormEndTime(entry.candidate.endTime || '');
+    setFormDescription(entry.candidate.description || '');
+    setCrudModalOpen(true);
+  };
+
+  const handleSaveAgendaForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formTitle.trim() || !formDate) return;
+
+    if (crudMode === 'create') {
+      const targetToken = formCommunityToken || room?.token || allRooms[0]?.token;
+      if (!targetToken) return;
+      const created = storageService.addAgenda(targetToken, {
+        date: formDate,
+        startTime: formStartTime || undefined,
+        endTime: formEndTime || undefined,
+        label: formTitle.trim(),
+        description: formDescription.trim(),
+      });
+      if (created) {
+        setSelectedDateStr(created.date);
+        setSelectedAgendaId(created.id);
+      }
+    } else if (crudMode === 'edit' && editingEntry) {
+      storageService.updateAgenda(editingEntry.room.token, editingEntry.candidate.id, {
+        date: formDate,
+        startTime: formStartTime || undefined,
+        endTime: formEndTime || undefined,
+        label: formTitle.trim(),
+        description: formDescription.trim(),
+      });
+      setSelectedDateStr(formDate);
+      setSelectedAgendaId(editingEntry.candidate.id);
+    }
+
+    setCrudModalOpen(false);
+  };
+
+  const handleDeleteAgenda = (entry: AgendaEntry) => {
+    if (window.confirm(`Hapus agenda "${entry.candidate.label || entry.candidate.date}"?`)) {
+      storageService.deleteAgenda(entry.room.token, entry.candidate.id);
+      setSelectedAgendaId(null);
+    }
+  };
+
+  const formatTimeRange = (cd: CandidateDate) => {
+    if (cd.startTime && cd.endTime) return `${cd.startTime} - ${cd.endTime} WIB`;
+    if (cd.startTime) return `${cd.startTime} WIB`;
+    if (cd.timeSlot === 'morning') return 'Pagi (08:00 - 12:00)';
+    if (cd.timeSlot === 'afternoon') return 'Siang (13:00 - 17:00)';
+    if (cd.timeSlot === 'evening') return 'Malam (18:30 - 21:00)';
+    return 'Seharian';
   };
 
   const dayHeaders = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
-
-  const hasUnsavedChanges = selectedCandidate && draftVote !== (committedUserVote?.status || null);
+  const hasUnsavedChanges =
+    activeAgendaEntry && draftVote !== (committedUserVote?.status || null);
 
   return (
     <div className="w-full space-y-4">
-      {/* Dynamic Full-Width Layout: [ MEMBER (left) | CALENDAR (center) | YOUR MEETING (right) ] */}
+      {/* Dynamic Full-Width 3-Panel Layout: MEMBER | CALENDAR | YOUR MEETING */}
       <div className="w-full flex flex-col lg:flex-row gap-5 items-start">
-        
         {/* ========================================================= */}
-        {/* PANEL 1: MEMBER (Dynamic width, ~20-25%)                  */}
+        {/* PANEL 1: MEMBER (Left)                                    */}
         {/* ========================================================= */}
         <div className="w-full lg:w-72 xl:w-80 shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-5 space-y-4">
           <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
@@ -162,18 +305,22 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 <span>MEMBER</span>
               </h2>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                {room.members.length} Anggota
+                {panelMembers.length} Anggota
+                {isAllMode && activeAgendaEntry ? ` • ${activeAgendaEntry.room.token}` : ''}
               </p>
             </div>
-            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
-              {room.token}
-            </span>
+            {!isAllMode && room && (
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                {room.token}
+              </span>
+            )}
           </div>
 
-          {/* Members list */}
           <div className="space-y-2 max-h-[600px] overflow-y-auto pr-0.5">
-            {room.members.map((member) => {
-              const mVote = selectedCandidate ? selectedVotes.find((v) => v.memberId === member.id) : null;
+            {panelMembers.map((member) => {
+              const mVote = activeAgendaEntry
+                ? activeVotes.find((v) => v.memberId === member.id)
+                : null;
               const isCurrentUser = activeUser?.id === member.id;
 
               return (
@@ -204,14 +351,15 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                       </p>
                       <p className="text-[10px] text-slate-400">
                         {member.role === 'admin' ? 'Host Admin' : 'Anggota'}
-                        {isCurrentUser && <span className="text-blue-600 font-semibold ml-1">(Anda)</span>}
+                        {isCurrentUser && (
+                          <span className="text-blue-600 font-semibold ml-1">(Anda)</span>
+                        )}
                       </p>
                     </div>
                   </div>
 
-                  {/* Vote status indicator on selected date */}
                   <div className="shrink-0 text-right">
-                    {selectedCandidate ? (
+                    {activeAgendaEntry ? (
                       mVote?.status === 'available' ? (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                           <CheckCircle2 className="w-3 h-3" />
@@ -241,19 +389,16 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
         </div>
 
         {/* ========================================================= */}
-        {/* PANEL 2: CALENDAR (Dynamic width, fills remaining space)  */}
+        {/* PANEL 2: CALENDAR (Center, fluid)                         */}
         {/* ========================================================= */}
         <div className="w-full lg:flex-1 min-w-0 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-5 space-y-4">
-          {/* Calendar Header with Month Navigation */}
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-xs font-black text-slate-900 tracking-wider uppercase flex items-center gap-2">
                 <CalendarIcon className="w-4 h-4 text-indigo-600" />
                 <span>CALENDAR</span>
               </h2>
-              <p className="text-xs font-bold text-slate-700 mt-0.5 capitalize">
-                {monthName}
-              </p>
+              <p className="text-xs font-bold text-slate-700 mt-0.5 capitalize">{monthName}</p>
             </div>
 
             <div className="flex items-center gap-1">
@@ -285,38 +430,43 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
 
           {/* Monthly Day Grid */}
           <div className="grid grid-cols-7 gap-1.5">
-            {/* Empty padding for days before 1st */}
             {Array.from({ length: firstDayIndex }).map((_, i) => (
-              <div key={`empty-${i}`} className="h-20 rounded-xl bg-slate-50/40 border border-slate-100 opacity-25" />
+              <div
+                key={`empty-${i}`}
+                className="h-20 rounded-xl bg-slate-50/40 border border-slate-100 opacity-25"
+              />
             ))}
 
-            {/* Days 1..daysInMonth */}
             {Array.from({ length: daysInMonth }).map((_, dayIndex) => {
               const dayNum = dayIndex + 1;
               const padMonth = String(month + 1).padStart(2, '0');
               const padDay = String(dayNum).padStart(2, '0');
               const dateStr = `${year}-${padMonth}-${padDay}`;
 
-              const candidate = candidateByDateStr.get(dateStr);
-              const rankInfo = candidate ? rankingMap.get(candidate.id) : null;
+              const entriesOnDay = agendasByDateStr.get(dateStr) || [];
+              const primaryEntry = entriesOnDay[0] || null;
               const isSelected = selectedDateStr === dateStr;
-              const isApprovedWinner = candidate ? isFinalizedWinner(candidate) : false;
+              const hasApprovedWinner = entriesOnDay.some((e) => isFinalizedWinner(e));
 
-              // Heat percentage
-              const pct = rankInfo?.availabilityPercentage ?? 0;
-              const hasVotes = candidate && (room.votes[candidate.id]?.length || 0) > 0;
+              const pct = primaryEntry?.rankInfo?.availabilityPercentage ?? 0;
+              const hasVotes =
+                primaryEntry &&
+                (primaryEntry.room.votes[primaryEntry.candidate.id]?.length || 0) > 0;
 
               return (
                 <button
                   key={dateStr}
                   type="button"
-                  onClick={() => setSelectedDateStr(dateStr)}
-                  className={`h-20 rounded-xl border text-left p-1.5 flex flex-col justify-between transition-all duration-150 relative group ${
+                  onClick={() => {
+                    setSelectedDateStr(dateStr);
+                    setSelectedAgendaId(entriesOnDay[0]?.candidate.id || null);
+                  }}
+                  className={`h-20 rounded-xl border text-left p-1.5 flex flex-col justify-between transition-all duration-150 relative ${
                     isSelected
                       ? 'ring-2 ring-blue-600 border-blue-600 bg-blue-50/40 shadow-xs'
-                      : candidate
-                      ? 'bg-white hover:border-slate-300 hover:shadow-2xs'
-                      : 'bg-slate-50/40 hover:bg-slate-100/60 border-slate-150'
+                      : primaryEntry
+                      ? 'bg-white hover:border-slate-300 hover:shadow-2xs border-slate-200'
+                      : 'bg-slate-50/30 hover:bg-slate-100/50 border-slate-100'
                   }`}
                 >
                   {/* Top: Day number */}
@@ -325,7 +475,7 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                       className={`text-xs font-bold leading-none ${
                         isSelected
                           ? 'text-blue-700'
-                          : candidate
+                          : primaryEntry
                           ? 'text-slate-900'
                           : 'text-slate-400'
                       }`}
@@ -333,28 +483,23 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                       {dayNum}
                     </span>
 
-                    {/* Small dot indicator if active user has committed vote */}
-                    {candidate && activeUser && (
-                      <div>
-                        {room.votes[candidate.id]?.find((v) => v.memberId === activeUser.id)?.status === 'available' && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 block" title="Anda memilih Bisa" />
-                        )}
-                      </div>
+                    {entriesOnDay.length > 1 && (
+                      <span className="text-[9px] font-bold px-1 rounded bg-indigo-100 text-indigo-700">
+                        +{entriesOnDay.length - 1}
+                      </span>
                     )}
                   </div>
 
-                  {/* Bottom: Pill status (YAY! vs Available % vs N/A) */}
+                  {/* Bottom: Pill status ONLY if an agenda exists (blank if none — no "N/A") */}
                   <div className="w-full">
-                    {isApprovedWinner ? (
-                      /* YAY! if approved by admin */
-                      <div className="w-full py-1 px-1 rounded-lg bg-emerald-500 text-white text-[11px] font-black text-center shadow-xs animate-bounce tracking-wide">
+                    {hasApprovedWinner ? (
+                      <div className="w-full py-1 px-1 rounded-lg bg-emerald-500 text-white text-[11px] font-black text-center shadow-xs tracking-wide">
                         YAY!
                       </div>
-                    ) : candidate ? (
-                      /* Candidate Date: Available % */
+                    ) : primaryEntry ? (
                       <div
                         className={`w-full py-0.5 px-1 rounded-md text-[10px] font-bold text-center truncate ${
-                          pct >= (room.criteria.minTurnoutPercentage || 50)
+                          pct >= (primaryEntry.room.criteria.minTurnoutPercentage || 50)
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                             : pct >= 25
                             ? 'bg-amber-100 text-amber-800 border border-amber-200'
@@ -363,19 +508,14 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                       >
                         {hasVotes ? `Available ${pct}%` : 'Tersedia'}
                       </div>
-                    ) : (
-                      /* Non-candidate date: N/A */
-                      <div className="text-[10px] text-slate-400 text-center font-medium py-0.5">
-                        N/A
-                      </div>
-                    )}
+                    ) : null}
                   </div>
                 </button>
               );
             })}
           </div>
 
-          {/* Bottom Legend Note */}
+          {/* Bottom Legend */}
           <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <span className="font-black text-emerald-600 font-mono bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md text-[11px]">
@@ -393,15 +533,12 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
               <span className="flex items-center gap-1">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" /> 25-49%
               </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-full bg-slate-300 inline-block" /> N/A
-              </span>
             </div>
           </div>
         </div>
 
         {/* ========================================================= */}
-        {/* PANEL 3: YOUR MEETING (Dynamic width, ~25-30%)            */}
+        {/* PANEL 3: YOUR MEETING (Right, with full details & CRUD)   */}
         {/* ========================================================= */}
         <div className="w-full lg:w-80 xl:w-96 shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-5 space-y-4">
           <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
@@ -409,48 +546,122 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
               <CalendarIcon className="w-4 h-4 text-amber-500" />
               <span>YOUR MEETING</span>
             </h2>
+
+            <button
+              type="button"
+              onClick={() => openCreateModal(selectedDateStr)}
+              className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold flex items-center gap-1 transition active:scale-95"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Agenda</span>
+            </button>
           </div>
 
-          {/* Meeting Card Header showing Date & Agenda */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-            <div className="flex items-center gap-3">
-              {/* Calendar Date Badge */}
-              <div className="w-12 h-14 rounded-xl bg-white border border-slate-200 shadow-2xs flex flex-col items-center justify-center shrink-0 overflow-hidden">
-                <span className="text-[9px] font-bold text-white bg-blue-600 w-full text-center py-0.5 uppercase tracking-wider">
-                  DATE
-                </span>
-                <span className="text-xl font-black text-slate-900 leading-tight">
-                  {selectedDateStr.split('-')[2] || '1'}
-                </span>
-              </div>
-
-              {/* Agenda / Event Title */}
-              <div className="min-w-0">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Agenda
-                </span>
-                <h3 className="text-sm font-extrabold text-slate-900 truncate">
-                  {room.name}
-                </h3>
-                <p className="text-[11px] text-slate-500 truncate">
-                  {selectedCandidate?.label || 'Sesi Diskusi & Konsensus'}
-                </p>
-              </div>
+          {/* Multiple agenda switcher when selected date has >1 agenda */}
+          {agendasOnSelectedDate.length > 1 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              {agendasOnSelectedDate.map((entry) => {
+                const isActive = activeAgendaEntry?.candidate.id === entry.candidate.id;
+                return (
+                  <button
+                    key={entry.candidate.id}
+                    type="button"
+                    onClick={() => setSelectedAgendaId(entry.candidate.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 border transition ${
+                      isActive
+                        ? 'bg-blue-50 border-blue-300 text-blue-700'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    {entry.candidate.label || 'Agenda'}
+                  </button>
+                );
+              })}
             </div>
+          )}
 
-            {/* Date display string */}
-            <p className="text-xs font-semibold text-slate-700 pt-1 border-t border-slate-200/80">
-              {formatDateDisplay(selectedDateStr, selectedCandidate?.timeSlot)}
-            </p>
-          </div>
-
-          {/* Candidate Status or N/A message */}
-          {selectedCandidate ? (
+          {/* Meeting Detail Card */}
+          {activeAgendaEntry ? (
             <div className="space-y-4">
-              {/* Is it the approved winner? */}
+              {/* Date, Time, Agenda Title, Description & Edit/Delete */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {/* Calendar Date Badge */}
+                    <div className="w-12 h-14 rounded-xl bg-white border border-slate-200 shadow-2xs flex flex-col items-center justify-center shrink-0 overflow-hidden">
+                      <span className="text-[9px] font-bold text-white bg-blue-600 w-full text-center py-0.5 uppercase tracking-wider">
+                        DATE
+                      </span>
+                      <span className="text-xl font-black text-slate-900 leading-tight">
+                        {activeAgendaEntry.candidate.date.split('-')[2] || '1'}
+                      </span>
+                    </div>
+
+                    <div className="min-w-0">
+                      {isAllMode && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded mb-1">
+                          <Building2 className="w-2.5 h-2.5" />
+                          <span className="truncate max-w-[140px]">
+                            {activeAgendaEntry.room.name}
+                          </span>
+                        </span>
+                      )}
+                      <h3 className="text-sm font-extrabold text-slate-900 leading-snug">
+                        {activeAgendaEntry.candidate.label || activeAgendaEntry.room.name}
+                      </h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {formatDateDisplay(
+                          activeAgendaEntry.candidate.date,
+                          activeAgendaEntry.candidate.timeSlot
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* CRUD Edit / Delete buttons */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(activeAgendaEntry)}
+                      title="Edit Agenda"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-white border border-transparent hover:border-slate-200 transition"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAgenda(activeAgendaEntry)}
+                      title="Hapus Agenda"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-white border border-transparent hover:border-slate-200 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Time / Jam */}
+                <div className="flex items-center gap-2 text-xs text-slate-700 pt-2 border-t border-slate-200/80">
+                  <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span className="font-semibold">
+                    {formatTimeRange(activeAgendaEntry.candidate)}
+                  </span>
+                </div>
+
+                {/* Event / Agenda Description */}
+                <div className="flex items-start gap-2 text-xs text-slate-600">
+                  <AlignLeft className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    {activeAgendaEntry.candidate.description ||
+                      activeAgendaEntry.room.description ||
+                      'Tidak ada deskripsi tambahan untuk agenda ini.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Approved Banner */}
               {isSelectedApprovedWinner && (
                 <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center gap-2 text-emerald-800 text-xs font-bold">
-                  <span className="text-base">🎉</span>
+                  <span>🎉</span>
                   <span>Jadwal ini resmi disetujui (YAY!)</span>
                 </div>
               )}
@@ -460,28 +671,29 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Tingkat Kehadiran:</span>
                   <span className="font-mono font-bold text-slate-900">
-                    {selectedRankInfo?.availabilityPercentage || 0}%
+                    {activeAgendaEntry.rankInfo?.availabilityPercentage || 0}%
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
                   <div
                     className={`h-full transition-all ${
-                      (selectedRankInfo?.availabilityPercentage || 0) >= (room.criteria.minTurnoutPercentage || 50)
+                      (activeAgendaEntry.rankInfo?.availabilityPercentage || 0) >=
+                      (activeAgendaEntry.room.criteria.minTurnoutPercentage || 50)
                         ? 'bg-emerald-500'
                         : 'bg-amber-500'
                     }`}
-                    style={{ width: `${selectedRankInfo?.availabilityPercentage || 0}%` }}
+                    style={{
+                      width: `${activeAgendaEntry.rankInfo?.availabilityPercentage || 0}%`,
+                    }}
                   />
                 </div>
                 <p className="text-[10px] text-slate-500">
-                  {selectedRankInfo?.availableCount || 0} dari {room.members.length} anggota dapat hadir
+                  {activeAgendaEntry.rankInfo?.availableCount || 0} dari{' '}
+                  {activeAgendaEntry.room.members.length} anggota dapat hadir
                 </p>
               </div>
 
-              {/* ========================================================= */}
-              {/* Requirement 4: Selection of Bisa/Ragu/Tidak               */}
-              {/* Doesn't update state until dropdown details event/save   */}
-              {/* ========================================================= */}
+              {/* Draft Voting Selection */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
@@ -536,7 +748,7 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 </div>
               </div>
 
-              {/* Requirement 4: Dropdown Details Event */}
+              {/* Dropdown Details Event & Commit Vote */}
               <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
                 <button
                   type="button"
@@ -547,22 +759,35 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                     <Info className="w-3.5 h-3.5 text-blue-600" />
                     <span>Rincian & Konfirmasi Event</span>
                   </span>
-                  {isDetailsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  {isDetailsOpen ? (
+                    <ChevronUp className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
                 </button>
 
                 {isDetailsOpen && (
                   <div className="p-3 pt-0 border-t border-slate-200/60 space-y-3 bg-white animate-in fade-in duration-150">
                     <div className="pt-2 text-[11px] text-slate-500 space-y-1">
-                      <p><strong className="text-slate-700">Waktu:</strong> {selectedCandidate.timeSlot === 'morning' ? 'Pagi' : selectedCandidate.timeSlot === 'afternoon' ? 'Siang' : selectedCandidate.timeSlot === 'evening' ? 'Malam' : 'Seharian'}</p>
-                      <p><strong className="text-slate-700">Status Kehadiran Anda saat ini:</strong> {committedUserVote ? committedUserVote.status : 'Belum memilih'}</p>
+                      <p>
+                        <strong className="text-slate-700">Community:</strong>{' '}
+                        {activeAgendaEntry.room.name}
+                      </p>
+                      <p>
+                        <strong className="text-slate-700">Jam:</strong>{' '}
+                        {formatTimeRange(activeAgendaEntry.candidate)}
+                      </p>
+                      <p>
+                        <strong className="text-slate-700">Status Tersimpan:</strong>{' '}
+                        {committedUserVote ? committedUserVote.status : 'Belum memilih'}
+                      </p>
                     </div>
 
-                    {/* Button to commit vote explicitly inside dropdown details */}
                     <button
                       type="button"
                       disabled={!draftVote}
                       onClick={handleCommitVote}
-                      className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-98 ${
+                      className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
                         hasUnsavedChanges
                           ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
                           : isSavedFeedback
@@ -578,7 +803,11 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                       ) : (
                         <>
                           <Save className="w-3.5 h-3.5" />
-                          <span>{hasUnsavedChanges ? 'Simpan Pilihan Kehadiran' : 'Perbarui Kehadiran'}</span>
+                          <span>
+                            {hasUnsavedChanges
+                              ? 'Simpan Pilihan Kehadiran'
+                              : 'Perbarui Kehadiran'}
+                          </span>
                         </>
                       )}
                     </button>
@@ -586,24 +815,12 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 )}
               </div>
 
-              {/* Quick Save button if user hasn't opened dropdown details */}
-              {hasUnsavedChanges && !isDetailsOpen && (
-                <button
-                  type="button"
-                  onClick={handleCommitVote}
-                  className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition active:scale-98 animate-pulse"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Simpan Pilihan Kehadiran</span>
-                </button>
-              )}
-
-              {/* Admin Approval Button (Sets YAY!) */}
+              {/* Admin Approval Button */}
               {!isSelectedApprovedWinner && (
                 <div className="pt-1">
                   <button
                     type="button"
-                    onClick={() => handleApproveDate(selectedCandidate)}
+                    onClick={() => handleApproveDate(activeAgendaEntry)}
                     className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition"
                   >
                     <ShieldCheck className="w-4 h-4" />
@@ -612,12 +829,14 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 </div>
               )}
 
-              {/* Export buttons if already finalized */}
+              {/* Export buttons if finalized */}
               {isSelectedApprovedWinner && (
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => downloadIcsFile(room, selectedCandidate)}
+                    onClick={() =>
+                      downloadIcsFile(activeAgendaEntry.room, activeAgendaEntry.candidate)
+                    }
                     className="py-2 px-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition"
                   >
                     <Download className="w-3.5 h-3.5" />
@@ -625,7 +844,12 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                   </button>
                   <button
                     type="button"
-                    onClick={() => window.open(getGoogleCalendarUrl(room, selectedCandidate), '_blank')}
+                    onClick={() =>
+                      window.open(
+                        getGoogleCalendarUrl(activeAgendaEntry.room, activeAgendaEntry.candidate),
+                        '_blank'
+                      )
+                    }
                     className="py-2 px-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
@@ -635,23 +859,157 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
               )}
             </div>
           ) : (
-            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 text-center space-y-3">
+            /* Empty date selected: Clean prompt to add a new agenda */
+            <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200/80 text-center space-y-3">
+              <div className="w-12 h-14 mx-auto rounded-xl bg-white border border-slate-200 flex flex-col items-center justify-center overflow-hidden">
+                <span className="text-[9px] font-bold text-white bg-slate-400 w-full text-center py-0.5 uppercase">
+                  DATE
+                </span>
+                <span className="text-xl font-black text-slate-700">
+                  {selectedDateStr.split('-')[2] || '1'}
+                </span>
+              </div>
               <p className="text-xs text-slate-500 font-medium">
-                Tanggal ini berstatus <strong className="text-slate-700">N/A</strong> (bukan kandidat aktif).
+                Belum ada agenda pada{' '}
+                <strong className="text-slate-700">{formatDateDisplay(selectedDateStr)}</strong>.
               </p>
               <button
                 type="button"
-                onClick={() => handleAddCandidate(selectedDateStr)}
-                className="w-full py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                onClick={() => openCreateModal(selectedDateStr)}
+                className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Jadikan Tanggal Kandidat</span>
+                <span>Tambah Agenda di Tanggal Ini</span>
               </button>
             </div>
           )}
         </div>
-
       </div>
+
+      {/* ========================================================= */}
+      {/* AGENDA CRUD MODAL (Create & Edit Agenda)                  */}
+      {/* ========================================================= */}
+      {crudModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-slate-50/50">
+              <h3 className="font-bold text-slate-900 text-sm">
+                {crudMode === 'create' ? 'Tambah Agenda Baru' : 'Edit Agenda'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCrudModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAgendaForm} className="p-4 space-y-3.5">
+              {/* Community selector (when creating in ALL mode) */}
+              {crudMode === 'create' && isAllMode && allRooms.length > 0 && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Community
+                  </label>
+                  <select
+                    value={formCommunityToken}
+                    onChange={(e) => setFormCommunityToken(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-blue-600 outline-none"
+                  >
+                    {allRooms.map((r) => (
+                      <option key={r.token} value={r.token}>
+                        {r.name} ({r.token})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Judul Agenda *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: Rapat Evaluasi Sprint"
+                  value={formTitle}
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-blue-600 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Tanggal *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={formDate}
+                  onChange={(e) => setFormDate(e.target.value)}
+                  className="w-full px-3 py-2 text-xs font-mono bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-blue-600 outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Jam Mulai
+                  </label>
+                  <input
+                    type="time"
+                    value={formStartTime}
+                    onChange={(e) => setFormStartTime(e.target.value)}
+                    className="w-full px-3 py-2 text-xs font-mono bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-blue-600 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Jam Selesai
+                  </label>
+                  <input
+                    type="time"
+                    value={formEndTime}
+                    onChange={(e) => setFormEndTime(e.target.value)}
+                    className="w-full px-3 py-2 text-xs font-mono bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-blue-600 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Deskripsi Event / Agenda
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Tuliskan detail pembahasan, lokasi, atau link meeting..."
+                  value={formDescription}
+                  onChange={(e) => setFormDescription(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-blue-600 outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCrudModalOpen(false)}
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition"
+                >
+                  {crudMode === 'create' ? 'Simpan Agenda' : 'Simpan Perubahan'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

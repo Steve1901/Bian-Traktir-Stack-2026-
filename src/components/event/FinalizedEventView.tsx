@@ -50,7 +50,7 @@ export const FinalizedEventView: React.FC<FinalizedEventViewProps> = ({ room, ac
   };
 
   const handleCopyAnnouncement = () => {
-    const text = `📢 *PENGUMUMAN JADWAL TERPILIH — JANJIAN*\n\nAcara: *${room.name}*\nTanggal: *${formatDateDisplay(finalizedCandidate.date, finalizedCandidate.timeSlot)}*\nToken Room: *${room.token}*\n\nCatatan Admin:\n${room.finalizedNotes || 'Tidak ada catatan tambahan.'}\n\nKehadiran: ${attendees.length} dari ${room.members.length} anggota dapat hadir.\n_Dibuat melalui Janjian — Token-Based Collaborative Scheduling_`;
+    const text = `📢 *PENGUMUMAN JADWAL TERPILIH — JANJIAN*\n\nAcara: *${room.name}*\nTanggal: *${formatDateDisplay(finalizedCandidate.date, finalizedCandidate.timeSlot)}*\nToken Community: *${room.token}*\n\nCatatan Admin:\n${room.finalizedNotes || 'Tidak ada catatan tambahan.'}\n\nKehadiran: ${attendees.length} dari ${room.members.length} anggota dapat hadir.\n_Dibuat melalui Janjian — Token-Based Collaborative Scheduling_`;
 
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -58,7 +58,7 @@ export const FinalizedEventView: React.FC<FinalizedEventViewProps> = ({ room, ac
   };
 
   const handleReopen = () => {
-    if (window.confirm('Buka kembali sesi voting untuk room ini?')) {
+    if (window.confirm('Buka kembali sesi voting untuk community ini?')) {
       storageService.reopenSchedule(room.token);
     }
   };
