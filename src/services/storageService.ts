@@ -1,10 +1,18 @@
+import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import type { Room, Member, Vote, CandidateDate, EventCriteria } from '../types';
 import { generateRoomToken } from '../lib/rankingEngine';
+import { db } from '../lib/firebase';
 
-const STORAGE_KEY_ROOMS = 'janjian_rooms_v2';
-const STORAGE_KEY_ACTIVE_USER = 'janjian_active_user_v1';
+const COMMUNITIES_COLLECTION = 'communities';
 
-// Seed sample room based on GDG ITB STACK 2026 Project
+/**
+ * Removes undefined values recursively so Cloud Firestore setDoc never rejects them.
+ */
+function sanitizeForFirestore<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+// Seed sample community based on GDG ITB STACK 2026 Project
 export function createSeedRoom(): Room {
   const adminId = 'fabian-1';
   const members: Member[] = [
@@ -42,7 +50,6 @@ export function createSeedRoom(): Room {
     },
   ];
 
-  // Dates: Tomorrow and consecutive days
   const today = new Date();
   const makeDateStr = (daysAhead: number) => {
     const d = new Date(today);
@@ -85,7 +92,6 @@ export function createSeedRoom(): Room {
     },
   ];
 
-  // Initial votes pre-filled for demonstration
   const votes: Record<string, Vote[]> = {
     'cd-1': [
       { memberId: 'fabian-1', memberName: 'Fabian Alvaro Muhammad', dateId: 'cd-1', status: 'available', updatedAt: 1 },
@@ -201,48 +207,76 @@ export function createSeedRooms(): Room[] {
 class StorageService {
   private rooms: Map<string, Room> = new Map();
   private listeners: Set<() => void> = new Set();
+  private activeUser: Member | null = null;
+  private isLoaded = false;
+  private syncError: string | null = null;
+  private hasAttemptedSeed = false;
 
   constructor() {
-    this.loadFromStorage();
+    this.initRealtimeSync();
   }
 
-  private loadFromStorage() {
-    try {
-      const data = localStorage.getItem(STORAGE_KEY_ROOMS);
-      if (data) {
-        const parsed: Room[] = JSON.parse(data);
+  private initRealtimeSync() {
+    const colRef = collection(db, COMMUNITIES_COLLECTION);
+
+    onSnapshot(
+      colRef,
+      (snapshot) => {
+        this.syncError = null;
+        this.isLoaded = true;
+
+        if (snapshot.empty && !this.hasAttemptedSeed) {
+          this.hasAttemptedSeed = true;
+          const seeds = createSeedRooms();
+          seeds.forEach((s) => {
+            this.rooms.set(s.token.toUpperCase(), s);
+            this.persistRoom(s);
+          });
+          this.notifyListeners();
+          return;
+        }
+
         this.rooms.clear();
-        parsed.forEach((r) => this.rooms.set(r.token.toUpperCase(), r));
-      } else {
-        // First run: seed with sample rooms
-        const seeds = createSeedRooms();
-        seeds.forEach((s) => this.rooms.set(s.token.toUpperCase(), s));
-        this.saveToStorage();
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as Room;
+          if (data && data.token) {
+            this.rooms.set(data.token.toUpperCase(), data);
+          }
+        });
+
+        this.notifyListeners();
+      },
+      (error) => {
+        console.error('Firestore realtime sync error:', error);
+        this.isLoaded = true;
+        this.syncError = error.message || 'Gagal terhubung ke Cloud Firestore.';
+        this.notifyListeners();
       }
-    } catch {
-      const seeds = createSeedRooms();
-      seeds.forEach((s) => this.rooms.set(s.token.toUpperCase(), s));
-    }
+    );
   }
 
-  private saveToStorage() {
+  private async persistRoom(room: Room) {
     try {
-      const array = Array.from(this.rooms.values());
-      localStorage.setItem(STORAGE_KEY_ROOMS, JSON.stringify(array));
-      this.notifyListeners();
+      const docRef = doc(db, COMMUNITIES_COLLECTION, room.token.toUpperCase());
+      await setDoc(docRef, sanitizeForFirestore(room));
     } catch (e) {
-      console.error('Failed to save to localStorage', e);
+      console.error('Failed to persist community to Firestore:', e);
+      this.syncError = e instanceof Error ? e.message : 'Gagal menyimpan perubahan ke server.';
+      this.notifyListeners();
     }
   }
 
   private notifyListeners() {
     this.listeners.forEach((fn) => fn());
-    window.dispatchEvent(new CustomEvent('janjian-store-update'));
   }
 
   public subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  public getSyncState(): { isLoaded: boolean; syncError: string | null } {
+    return { isLoaded: this.isLoaded, syncError: this.syncError };
   }
 
   public getRoomByToken(token: string): Room | null {
@@ -251,7 +285,7 @@ class StorageService {
   }
 
   public getAllRooms(): Room[] {
-    return Array.from(this.rooms.values());
+    return Array.from(this.rooms.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
 
   public createRoom(params: {
@@ -305,8 +339,9 @@ class StorageService {
     };
 
     this.rooms.set(token.toUpperCase(), newRoom);
-    this.saveToStorage();
     this.setActiveUser(adminMember);
+    this.notifyListeners();
+    void this.persistRoom(newRoom);
     return newRoom;
   }
 
@@ -314,7 +349,6 @@ class StorageService {
     const room = this.getRoomByToken(token);
     if (!room) return null;
 
-    // Check if member with same name already exists
     let member = room.members.find((m) => m.name.toLowerCase() === memberName.trim().toLowerCase());
     if (!member) {
       const colors = ['bg-indigo-600', 'bg-rose-600', 'bg-teal-600', 'bg-amber-600', 'bg-cyan-600', 'bg-violet-600'];
@@ -326,8 +360,9 @@ class StorageService {
         avatarColor: randomColor,
         joinedAt: Date.now(),
       };
-      room.members.push(member);
-      this.saveToStorage();
+      room.members = [...room.members, member];
+      this.notifyListeners();
+      void this.persistRoom(room);
     }
 
     this.setActiveUser(member);
@@ -338,16 +373,17 @@ class StorageService {
     const room = this.getRoomByToken(token);
     if (!room) return;
 
-    if (!room.votes[dateId]) {
-      room.votes[dateId] = [];
-    }
+    const currentVotes = [...(room.votes[dateId] || [])];
+    const existingIdx = currentVotes.findIndex((v) => v.memberId === memberId);
 
-    const existingIdx = room.votes[dateId].findIndex((v) => v.memberId === memberId);
     if (existingIdx >= 0) {
-      room.votes[dateId][existingIdx].status = status;
-      room.votes[dateId][existingIdx].updatedAt = Date.now();
+      currentVotes[existingIdx] = {
+        ...currentVotes[existingIdx],
+        status,
+        updatedAt: Date.now(),
+      };
     } else {
-      room.votes[dateId].push({
+      currentVotes.push({
         memberId,
         memberName,
         dateId,
@@ -356,7 +392,9 @@ class StorageService {
       });
     }
 
-    this.saveToStorage();
+    room.votes = { ...room.votes, [dateId]: currentVotes };
+    this.notifyListeners();
+    void this.persistRoom(room);
   }
 
   public addAgenda(
@@ -383,8 +421,9 @@ class StorageService {
       description: agenda.description?.trim() || '',
     };
 
-    room.candidateDates.push(newAgenda);
-    this.saveToStorage();
+    room.candidateDates = [...room.candidateDates, newAgenda];
+    this.notifyListeners();
+    void this.persistRoom(room);
     return newAgenda;
   }
 
@@ -396,14 +435,11 @@ class StorageService {
     const room = this.getRoomByToken(token);
     if (!room) return;
 
-    const idx = room.candidateDates.findIndex((cd) => cd.id === agendaId);
-    if (idx === -1) return;
-
-    room.candidateDates[idx] = {
-      ...room.candidateDates[idx],
-      ...updates,
-    };
-    this.saveToStorage();
+    room.candidateDates = room.candidateDates.map((cd) =>
+      cd.id === agendaId ? { ...cd, ...updates } : cd
+    );
+    this.notifyListeners();
+    void this.persistRoom(room);
   }
 
   public deleteAgenda(token: string, agendaId: string): void {
@@ -411,38 +447,50 @@ class StorageService {
     if (!room) return;
 
     room.candidateDates = room.candidateDates.filter((cd) => cd.id !== agendaId);
-    delete room.votes[agendaId];
+    const updatedVotes = { ...room.votes };
+    delete updatedVotes[agendaId];
+    room.votes = updatedVotes;
+
     if (room.finalizedDateId === agendaId) {
       room.status = 'VOTING';
-      room.finalizedDateId = undefined;
-      room.finalizedNotes = undefined;
+      delete room.finalizedDateId;
+      delete room.finalizedNotes;
+      delete room.finalizedAt;
     }
-    this.saveToStorage();
+
+    this.notifyListeners();
+    void this.persistRoom(room);
   }
 
   public updateRoomCriteria(token: string, criteria: Partial<EventCriteria>) {
     const room = this.getRoomByToken(token);
     if (!room) return;
+
     room.criteria = { ...room.criteria, ...criteria };
-    this.saveToStorage();
+    this.notifyListeners();
+    void this.persistRoom(room);
   }
 
   public toggleMustAttend(token: string, memberId: string) {
     const room = this.getRoomByToken(token);
     if (!room) return;
 
-    const member = room.members.find((m) => m.id === memberId);
-    if (!member) return;
-
-    member.isMustAttend = !member.isMustAttend;
     const currentList = new Set(room.criteria.mustAttendMemberIds || []);
-    if (member.isMustAttend) {
-      currentList.add(memberId);
-    } else {
-      currentList.delete(memberId);
-    }
-    room.criteria.mustAttendMemberIds = Array.from(currentList);
-    this.saveToStorage();
+    room.members = room.members.map((m) => {
+      if (m.id !== memberId) return m;
+      const next = !m.isMustAttend;
+      if (next) currentList.add(memberId);
+      else currentList.delete(memberId);
+      return { ...m, isMustAttend: next };
+    });
+
+    room.criteria = {
+      ...room.criteria,
+      mustAttendMemberIds: Array.from(currentList),
+    };
+
+    this.notifyListeners();
+    void this.persistRoom(room);
   }
 
   public finalizeSchedule(token: string, dateId: string, notes?: string) {
@@ -453,7 +501,8 @@ class StorageService {
     room.finalizedDateId = dateId;
     room.finalizedNotes = notes || '';
     room.finalizedAt = Date.now();
-    this.saveToStorage();
+    this.notifyListeners();
+    void this.persistRoom(room);
   }
 
   public reopenSchedule(token: string) {
@@ -461,35 +510,48 @@ class StorageService {
     if (!room) return;
 
     room.status = 'VOTING';
-    room.finalizedDateId = undefined;
-    room.finalizedNotes = undefined;
-    this.saveToStorage();
+    delete room.finalizedDateId;
+    delete room.finalizedNotes;
+    delete room.finalizedAt;
+    this.notifyListeners();
+    void this.persistRoom(room);
   }
 
-  public resetDemoData() {
-    this.rooms.clear();
-    const seeds = createSeedRooms();
-    seeds.forEach((s) => this.rooms.set(s.token.toUpperCase(), s));
-    this.saveToStorage();
-    this.setActiveUser(seeds[0].members[0]);
-  }
-
-  // Active User session helpers
-  public getActiveUser(): Member | null {
+  public async resetDemoData() {
     try {
-      const data = localStorage.getItem(STORAGE_KEY_ACTIVE_USER);
-      if (data) return JSON.parse(data);
-    } catch {}
-    // Default to Fabian if none selected
-    const seed = this.getRoomByToken('STACK-ITB');
+      const seeds = createSeedRooms();
+      for (const seed of seeds) {
+        const existing = this.rooms.get(seed.token.toUpperCase());
+        const resetDoc: Room = existing
+          ? {
+              ...seed,
+              id: existing.id,
+              token: existing.token,
+              adminId: existing.adminId,
+              adminName: existing.adminName,
+              createdAt: existing.createdAt,
+            }
+          : seed;
+        this.rooms.set(resetDoc.token.toUpperCase(), resetDoc);
+        await this.persistRoom(resetDoc);
+      }
+      this.setActiveUser(seeds[0].members[0]);
+      this.notifyListeners();
+    } catch (e) {
+      console.error('Failed to reset Firestore demo data:', e);
+    }
+  }
+
+  // Active user kept in memory (no localStorage for agenda/session data)
+  public getActiveUser(): Member | null {
+    if (this.activeUser) return this.activeUser;
+    const seed = this.getRoomByToken('STACK-ITB') || this.getAllRooms()[0];
     return seed?.members[0] || null;
   }
 
   public setActiveUser(member: Member) {
-    try {
-      localStorage.setItem(STORAGE_KEY_ACTIVE_USER, JSON.stringify(member));
-      this.notifyListeners();
-    } catch {}
+    this.activeUser = member;
+    this.notifyListeners();
   }
 }
 

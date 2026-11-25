@@ -1,0 +1,225 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: communities
+// Document ID: {token} (uppercase alphanumeric + hyphen, 3-32 chars, e.g., 'STACK-ITB', 'JAN-492A')
+// Fields:
+//   - id: string (required, 1-128 chars, immutable) - unique room identifier
+//   - token: string (required, 3-32 chars, ^[A-Z0-9-]+$, must equal document ID, immutable) - join token
+//   - name: string (required, 1-150 chars) - community/event display name
+//   - description: string (required, 0-1000 chars) - community/event description
+//   - adminId: string (required, 1-128 chars, immutable) - creator/admin member ID
+//   - adminName: string (required, 1-100 chars, immutable) - creator/admin display name
+//   - createdAt: number (required, > 0, immutable) - creation epoch timestamp in ms
+//   - members: list (required, 1-200 items) - list of Member objects (non-PII display names & roles)
+//   - candidateDates: list (required, 0-100 items) - list of CandidateDate / agenda objects
+//   - votes: map (required, 0-100 keys) - map of agendaId -> list of Vote objects
+//   - criteria: map (required, keys: minTurnoutPercentage [0-100], optional targetTurnoutPercentage [0-100], mustAttendMemberIds [list <= 200])
+//   - status: string (required, enum: 'VOTING' | 'FINALIZED' | 'CLOSED') - scheduling lifecycle state
+//   - finalizedDateId: string (optional/nullable, 1-128 chars; required when status == 'FINALIZED') - winning agenda ID
+//   - finalizedNotes: string (optional/nullable, 0-1000 chars) - finalization announcement notes
+//   - finalizedAt: number (optional/nullable, > 0) - finalization epoch timestamp in ms
+//
+// Access Model Note (Prototype / Zero-Friction Token Access):
+//   Janjian currently uses zero-friction token-based access without forced login/signup.
+//   To harden for production with Firebase Auth (Anonymous Auth or Google/Email Sign-In):
+//   1. Require `isAuthenticated()` on `read`, `create`, and `update`.
+//   2. Replace `allow read` with `allow get: if isAuthenticated(); allow list: if false;`
+//      (so users can only fetch communities when they know the exact token).
+//   3. Store `adminUid: request.auth.uid` on create (`uidUnchanged()`), enforce `uidNotModified()`
+//      on update, and restrict admin-only mutations (finalizing, changing criteria, deleting agendas)
+//      to `isOwner(resource.data.adminUid)`.
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Auth helpers (ready for Firebase Auth hardening)
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    // Schema & field helpers
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) ||
+        data[field] == null ||
+        isValidString(data[field], minLen, maxLen);
+    }
+
+    function isValidOptionalPositiveNumber(data, field) {
+      return !(field in data) ||
+        data[field] == null ||
+        (data[field] is number && data[field] > 0);
+    }
+
+    function isValidList(listVal, minSize, maxSize) {
+      return listVal is list && listVal.size() >= minSize && listVal.size() <= maxSize;
+    }
+
+    function isValidToken(token) {
+      return token is string &&
+        token.size() >= 3 &&
+        token.size() <= 32 &&
+        token.matches('^[A-Z0-9-]+$');
+    }
+
+    // ===============================================================
+    // Domain Validators (Used in BOTH create and update)
+    // ===============================================================
+
+    function isValidCriteria(criteria) {
+      return criteria is map &&
+        criteria.keys().hasOnly([
+          'minTurnoutPercentage',
+          'targetTurnoutPercentage',
+          'mustAttendMemberIds'
+        ]) &&
+        criteria.keys().hasAll([
+          'minTurnoutPercentage',
+          'mustAttendMemberIds'
+        ]) &&
+        criteria.minTurnoutPercentage is number &&
+        criteria.minTurnoutPercentage >= 0 &&
+        criteria.minTurnoutPercentage <= 100 &&
+        (!('targetTurnoutPercentage' in criteria) ||
+          criteria.targetTurnoutPercentage == null ||
+          (criteria.targetTurnoutPercentage is number &&
+            criteria.targetTurnoutPercentage >= 0 &&
+            criteria.targetTurnoutPercentage <= 100)) &&
+        isValidList(criteria.mustAttendMemberIds, 0, 200);
+    }
+
+    function isValidStatusTransition(prevStatus, nextStatus) {
+      return prevStatus == nextStatus ||
+        (prevStatus == 'VOTING' && nextStatus in ['FINALIZED', 'CLOSED']) ||
+        (prevStatus == 'FINALIZED' && nextStatus in ['VOTING', 'CLOSED']) ||
+        (prevStatus == 'CLOSED' && nextStatus == 'VOTING');
+    }
+
+    function isValidCommunity(data, token) {
+      return hasOnlyAllowedFields(data, [
+          'id',
+          'token',
+          'name',
+          'description',
+          'adminId',
+          'adminName',
+          'createdAt',
+          'members',
+          'candidateDates',
+          'votes',
+          'criteria',
+          'status',
+          'finalizedDateId',
+          'finalizedNotes',
+          'finalizedAt'
+        ]) &&
+        hasRequiredFields(data, [
+          'id',
+          'token',
+          'name',
+          'description',
+          'adminId',
+          'adminName',
+          'createdAt',
+          'members',
+          'candidateDates',
+          'votes',
+          'criteria',
+          'status'
+        ]) &&
+        isValidString(data.id, 1, 128) &&
+        isValidToken(data.token) &&
+        data.token == token &&
+        isValidString(data.name, 1, 150) &&
+        isValidString(data.description, 0, 1000) &&
+        isValidString(data.adminId, 1, 128) &&
+        isValidString(data.adminName, 1, 100) &&
+        data.createdAt is number &&
+        data.createdAt > 0 &&
+        isValidList(data.members, 1, 200) &&
+        isValidList(data.candidateDates, 0, 100) &&
+        data.votes is map &&
+        data.votes.size() <= 100 &&
+        isValidCriteria(data.criteria) &&
+        data.status in ['VOTING', 'FINALIZED', 'CLOSED'] &&
+        isValidOptionalString(data, 'finalizedDateId', 1, 128) &&
+        isValidOptionalString(data, 'finalizedNotes', 0, 1000) &&
+        isValidOptionalPositiveNumber(data, 'finalizedAt') &&
+        (data.status != 'FINALIZED' ||
+          ('finalizedDateId' in data && isValidString(data.finalizedDateId, 1, 128)));
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /communities/{token} {
+      // Zero-friction token-based read access (get & list) for prototype.
+      // Hardening: replace with `allow get: if isAuthenticated(); allow list: if false;`
+      allow read: if true;
+
+      // Anyone with the app can create a new community room starting in 'VOTING' status.
+      // Hardening: add `isAuthenticated() && uidUnchanged()` and bind `adminUid == request.auth.uid`.
+      allow create: if isValidToken(token) &&
+        isValidCommunity(request.resource.data, token) &&
+        request.resource.data.status == 'VOTING';
+
+      // Collaborative updates (join, add/edit/delete agendas, vote, update criteria, finalize/reopen).
+      // Enforces full schema validation, immutable identity/creator fields, and valid status transitions.
+      // Hardening: add `isAuthenticated() && uidNotModified()` and restrict admin-only fields to `isOwner(resource.data.adminUid)`.
+      allow update: if isValidToken(token) &&
+        isValidCommunity(request.resource.data, token) &&
+        areImmutableFieldsUnchanged(['id', 'token', 'adminId', 'adminName', 'createdAt']) &&
+        isValidStatusTransition(resource.data.status, request.resource.data.status);
+
+      // Prevent client-side deletion of community rooms.
+      allow delete: if false;
+    }
+
+    // Default deny all other collections and subcollections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

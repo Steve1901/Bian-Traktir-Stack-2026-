@@ -10,7 +10,11 @@ import { CreateRoomModal } from './components/room/CreateRoomModal';
 import { JoinRoomModal } from './components/room/JoinRoomModal';
 
 export function App() {
-  const [activeToken, setActiveToken] = useState<string>('STACK-ITB');
+  const [activeToken, setActiveToken] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get('token');
+    return urlToken ? urlToken.trim().toUpperCase() : 'STACK-ITB';
+  });
   const [room, setRoom] = useState<Room | null>(null);
   const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [activeUser, setActiveUser] = useState<Member | null>(null);
@@ -18,10 +22,14 @@ export function App() {
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isJoinOpen, setIsJoinOpen] = useState(false);
+  const [syncState, setSyncState] = useState<{ isLoaded: boolean; syncError: string | null }>(() =>
+    storageService.getSyncState()
+  );
 
   const isAllMode = activeToken === 'ALL';
 
   const refreshState = () => {
+    setSyncState(storageService.getSyncState());
     const roomsList = storageService.getAllRooms();
     setAllRooms(roomsList);
 
@@ -93,7 +101,20 @@ export function App() {
 
       {/* Main Container - Dynamic Full Width */}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-5 space-y-4">
-        {isAllMode || room ? (
+        {syncState.syncError && (
+          <div className="w-full p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-2">
+            <span>
+              <strong>Sync Error:</strong> {syncState.syncError}
+            </span>
+          </div>
+        )}
+
+        {!syncState.isLoaded ? (
+          <div className="flex flex-col items-center justify-center py-24 gap-3 text-slate-500">
+            <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs font-medium">Menghubungkan ke Cloud Firestore...</p>
+          </div>
+        ) : isAllMode || room ? (
           <>
             {currentTab === 'calendar' && (
               <SharedCalendarView
