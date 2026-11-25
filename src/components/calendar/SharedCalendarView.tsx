@@ -1,19 +1,23 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import {
   Users,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   HelpCircle,
   XCircle,
-  Sparkles,
   Calendar as CalendarIcon,
   Download,
   ExternalLink,
   ShieldCheck,
   Star,
   Plus,
+  Save,
+  Check,
+  Info,
 } from 'lucide-react';
 import type { Room, Member, VoteStatus, CandidateDate } from '../../types';
 import { rankCandidateDates, formatDateDisplay } from '../../lib/rankingEngine';
@@ -50,6 +54,11 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
     return new Date().toISOString().split('T')[0];
   });
 
+  // Requirement 4: Draft voting selection (does NOT update room state until confirmed)
+  const [draftVote, setDraftVote] = useState<VoteStatus | null>(null);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isSavedFeedback, setIsSavedFeedback] = useState(false);
+
   const rankedResults = rankCandidateDates(room);
   const rankingMap = useMemo(() => {
     return new Map(rankedResults.map((r) => [r.dateId, r]));
@@ -66,9 +75,21 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
   const selectedCandidate = candidateByDateStr.get(selectedDateStr) || null;
   const selectedRankInfo = selectedCandidate ? rankingMap.get(selectedCandidate.id) : null;
   const selectedVotes = selectedCandidate ? (room.votes[selectedCandidate.id] || []) : [];
-  const activeUserVote = activeUser && selectedCandidate
+  
+  // Committed vote from storage
+  const committedUserVote = activeUser && selectedCandidate
     ? selectedVotes.find((v) => v.memberId === activeUser.id)
     : null;
+
+  // Initialize draft vote when selected date or active user changes
+  useEffect(() => {
+    if (committedUserVote) {
+      setDraftVote(committedUserVote.status);
+    } else {
+      setDraftVote(null);
+    }
+    setIsSavedFeedback(false);
+  }, [selectedDateStr, activeUser?.id, committedUserVote?.status]);
 
   const isFinalizedWinner = (candidate: CandidateDate) => {
     return room.status === 'FINALIZED' && room.finalizedDateId === candidate.id;
@@ -91,11 +112,14 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
   const monthName = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(currentMonthDate);
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7; // shift so Monday is 0
+  const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7;
 
-  const handleVote = (candidateDate: CandidateDate, status: VoteStatus) => {
-    if (!activeUser) return;
-    storageService.submitVote(room.token, activeUser.id, activeUser.name, candidateDate.id, status);
+  // Requirement 4: Commit draft vote to storageService when user explicitly saves or confirms via details dropdown
+  const handleCommitVote = () => {
+    if (!activeUser || !selectedCandidate || !draftVote) return;
+    storageService.submitVote(room.token, activeUser.id, activeUser.name, selectedCandidate.id, draftVote);
+    setIsSavedFeedback(true);
+    setTimeout(() => setIsSavedFeedback(false), 2500);
   };
 
   const handleApproveDate = (candidate: CandidateDate) => {
@@ -120,32 +144,34 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
 
   const dayHeaders = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 
+  const hasUnsavedChanges = selectedCandidate && draftVote !== (committedUserVote?.status || null);
+
   return (
-    <div className="space-y-4">
-      {/* 3-Column Layout: MEMBER | Calendar | Your Meeting */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+    <div className="w-full space-y-4">
+      {/* Dynamic Full-Width Layout: [ MEMBER (left) | CALENDAR (center) | YOUR MEETING (right) ] */}
+      <div className="w-full flex flex-col lg:flex-row gap-5 items-start">
         
         {/* ========================================================= */}
-        {/* PANEL 1: MEMBER (Left Column, ~3 cols)                    */}
+        {/* PANEL 1: MEMBER (Dynamic width, ~20-25%)                  */}
         {/* ========================================================= */}
-        <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5 space-y-4">
+        <div className="w-full lg:w-72 xl:w-80 shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-5 space-y-4">
           <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-extrabold text-slate-800 tracking-wider uppercase flex items-center gap-2">
+              <h2 className="text-xs font-black text-slate-900 tracking-wider uppercase flex items-center gap-2">
                 <Users className="w-4 h-4 text-blue-600" />
                 <span>MEMBER</span>
               </h2>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                {room.members.length} Anggota Terdaftar
+                {room.members.length} Anggota
               </p>
             </div>
-            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
               {room.token}
             </span>
           </div>
 
           {/* Members list */}
-          <div className="space-y-2.5 max-h-[600px] overflow-y-auto pr-1">
+          <div className="space-y-2 max-h-[600px] overflow-y-auto pr-0.5">
             {room.members.map((member) => {
               const mVote = selectedCandidate ? selectedVotes.find((v) => v.memberId === member.id) : null;
               const isCurrentUser = activeUser?.id === member.id;
@@ -155,15 +181,15 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                   key={member.id}
                   className={`p-2.5 rounded-xl border transition flex items-center justify-between gap-2.5 ${
                     isCurrentUser
-                      ? 'bg-blue-50/80 border-blue-200'
-                      : 'bg-slate-50/60 border-slate-200/70 hover:bg-slate-50'
+                      ? 'bg-blue-50/70 border-blue-200'
+                      : 'bg-slate-50/50 border-slate-200/70 hover:bg-slate-50'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div
-                      className={`w-8 h-8 rounded-full ${
+                      className={`w-7 h-7 rounded-full ${
                         member.avatarColor || 'bg-blue-600'
-                      } text-white text-xs flex items-center justify-center font-extrabold shrink-0 shadow-2xs`}
+                      } text-white text-[11px] flex items-center justify-center font-bold shrink-0 shadow-2xs`}
                     >
                       {member.name.charAt(0)}
                     </div>
@@ -176,9 +202,9 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                           </span>
                         )}
                       </p>
-                      <p className="text-[10px] text-slate-400 flex items-center gap-1">
-                        <span>{member.role === 'admin' ? 'Host Admin' : 'Anggota'}</span>
-                        {isCurrentUser && <span className="text-blue-600 font-semibold">(Anda)</span>}
+                      <p className="text-[10px] text-slate-400">
+                        {member.role === 'admin' ? 'Host Admin' : 'Anggota'}
+                        {isCurrentUser && <span className="text-blue-600 font-semibold ml-1">(Anda)</span>}
                       </p>
                     </div>
                   </div>
@@ -187,17 +213,17 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                   <div className="shrink-0 text-right">
                     {selectedCandidate ? (
                       mVote?.status === 'available' ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                           <CheckCircle2 className="w-3 h-3" />
                           <span>Bisa</span>
                         </span>
                       ) : mVote?.status === 'tentative' ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-100/90 px-2 py-0.5 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
                           <HelpCircle className="w-3 h-3" />
                           <span>Ragu</span>
                         </span>
                       ) : mVote?.status === 'unavailable' ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-100/90 px-2 py-0.5 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
                           <XCircle className="w-3 h-3" />
                           <span>Tidak</span>
                         </span>
@@ -212,30 +238,27 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
               );
             })}
           </div>
-
-          <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-400">
-            <span className="font-medium text-slate-600">Tip:</span> Klik tanggal di kalender tengah untuk melihat siapa saja yang bisa hadir.
-          </div>
         </div>
 
         {/* ========================================================= */}
-        {/* PANEL 2: CALENDAR (Center Column, ~6 cols)                */}
+        {/* PANEL 2: CALENDAR (Dynamic width, fills remaining space)  */}
         {/* ========================================================= */}
-        <div className="lg:col-span-6 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5 space-y-4">
+        <div className="w-full lg:flex-1 min-w-0 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-5 space-y-4">
           {/* Calendar Header with Month Navigation */}
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
-              <h2 className="text-sm font-extrabold text-slate-800 tracking-wider uppercase flex items-center gap-2">
+              <h2 className="text-xs font-black text-slate-900 tracking-wider uppercase flex items-center gap-2">
                 <CalendarIcon className="w-4 h-4 text-indigo-600" />
                 <span>CALENDAR</span>
               </h2>
-              <p className="text-xs font-semibold text-slate-700 mt-0.5 capitalize">
+              <p className="text-xs font-bold text-slate-700 mt-0.5 capitalize">
                 {monthName}
               </p>
             </div>
 
             <div className="flex items-center gap-1">
               <button
+                type="button"
                 onClick={prevMonth}
                 className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition"
                 title="Bulan sebelumnya"
@@ -243,6 +266,7 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
+                type="button"
                 onClick={nextMonth}
                 className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition"
                 title="Bulan berikutnya"
@@ -261,9 +285,9 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
 
           {/* Monthly Day Grid */}
           <div className="grid grid-cols-7 gap-1.5">
-            {/* Empty offset padding for days before the 1st */}
+            {/* Empty padding for days before 1st */}
             {Array.from({ length: firstDayIndex }).map((_, i) => (
-              <div key={`empty-${i}`} className="h-20 rounded-xl bg-slate-50/40 border border-slate-100 opacity-30" />
+              <div key={`empty-${i}`} className="h-20 rounded-xl bg-slate-50/40 border border-slate-100 opacity-25" />
             ))}
 
             {/* Days 1..daysInMonth */}
@@ -289,10 +313,10 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                   onClick={() => setSelectedDateStr(dateStr)}
                   className={`h-20 rounded-xl border text-left p-1.5 flex flex-col justify-between transition-all duration-150 relative group ${
                     isSelected
-                      ? 'ring-2 ring-blue-600 border-blue-600 bg-blue-50/40 shadow-sm'
+                      ? 'ring-2 ring-blue-600 border-blue-600 bg-blue-50/40 shadow-xs'
                       : candidate
                       ? 'bg-white hover:border-slate-300 hover:shadow-2xs'
-                      : 'bg-slate-50/50 hover:bg-slate-100/60 border-slate-150'
+                      : 'bg-slate-50/40 hover:bg-slate-100/60 border-slate-150'
                   }`}
                 >
                   {/* Top: Day number */}
@@ -309,7 +333,7 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                       {dayNum}
                     </span>
 
-                    {/* Small dot indicator if active user voted */}
+                    {/* Small dot indicator if active user has committed vote */}
                     {candidate && activeUser && (
                       <div>
                         {room.votes[candidate.id]?.find((v) => v.memberId === activeUser.id)?.status === 'available' && (
@@ -322,12 +346,12 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                   {/* Bottom: Pill status (YAY! vs Available % vs N/A) */}
                   <div className="w-full">
                     {isApprovedWinner ? (
-                      /* YAY! if approved by admin (as in user sketch) */
+                      /* YAY! if approved by admin */
                       <div className="w-full py-1 px-1 rounded-lg bg-emerald-500 text-white text-[11px] font-black text-center shadow-xs animate-bounce tracking-wide">
                         YAY!
                       </div>
                     ) : candidate ? (
-                      /* Candidate Date: Available % (or green/amber pill) */
+                      /* Candidate Date: Available % */
                       <div
                         className={`w-full py-0.5 px-1 rounded-md text-[10px] font-bold text-center truncate ${
                           pct >= (room.criteria.minTurnoutPercentage || 50)
@@ -351,10 +375,10 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
             })}
           </div>
 
-          {/* Bottom Legend Note: Exactly like in the sketch */}
+          {/* Bottom Legend Note */}
           <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs flex-wrap gap-2">
             <div className="flex items-center gap-2">
-              <span className="font-extrabold text-emerald-600 font-mono bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md text-[11px]">
+              <span className="font-black text-emerald-600 font-mono bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md text-[11px]">
                 YAY!
               </span>
               <span className="text-slate-600 font-medium text-[11px]">
@@ -377,17 +401,14 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
         </div>
 
         {/* ========================================================= */}
-        {/* PANEL 3: YOUR MEETING (Right Column, ~3 cols)             */}
+        {/* PANEL 3: YOUR MEETING (Dynamic width, ~25-30%)            */}
         {/* ========================================================= */}
-        <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5 space-y-4">
+        <div className="w-full lg:w-80 xl:w-96 shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-xs p-4 sm:p-5 space-y-4">
           <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-extrabold text-slate-800 tracking-wider uppercase flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-500" />
-                <span>YOUR MEETING</span>
-              </h2>
-              <p className="text-[11px] text-slate-400 mt-0.5">Rincian & Keputusan Jadwal</p>
-            </div>
+            <h2 className="text-xs font-black text-slate-900 tracking-wider uppercase flex items-center gap-2">
+              <CalendarIcon className="w-4 h-4 text-amber-500" />
+              <span>YOUR MEETING</span>
+            </h2>
           </div>
 
           {/* Meeting Card Header showing Date & Agenda */}
@@ -457,16 +478,28 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 </p>
               </div>
 
-              {/* Voting buttons for Active User */}
+              {/* ========================================================= */}
+              {/* Requirement 4: Selection of Bisa/Ragu/Tidak               */}
+              {/* Doesn't update state until dropdown details event/save   */}
+              {/* ========================================================= */}
               <div className="space-y-2">
-                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
-                  Pilihan Anda:
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                    Pilihan Kehadiran Anda:
+                  </label>
+                  {hasUnsavedChanges && (
+                    <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                      Belum Disimpan
+                    </span>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-3 gap-1.5">
                   <button
-                    onClick={() => handleVote(selectedCandidate, 'available')}
+                    type="button"
+                    onClick={() => setDraftVote('available')}
                     className={`py-2 px-1 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 transition active:scale-95 ${
-                      activeUserVote?.status === 'available'
+                      draftVote === 'available'
                         ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-600'
                         : 'bg-white hover:bg-emerald-50 text-slate-700 border border-slate-200 hover:border-emerald-300'
                     }`}
@@ -476,9 +509,10 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                   </button>
 
                   <button
-                    onClick={() => handleVote(selectedCandidate, 'tentative')}
+                    type="button"
+                    onClick={() => setDraftVote('tentative')}
                     className={`py-2 px-1 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 transition active:scale-95 ${
-                      activeUserVote?.status === 'tentative'
+                      draftVote === 'tentative'
                         ? 'bg-amber-500 text-white shadow-md shadow-amber-500/30 ring-2 ring-amber-500'
                         : 'bg-white hover:bg-amber-50 text-slate-700 border border-slate-200 hover:border-amber-300'
                     }`}
@@ -488,9 +522,10 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                   </button>
 
                   <button
-                    onClick={() => handleVote(selectedCandidate, 'unavailable')}
+                    type="button"
+                    onClick={() => setDraftVote('unavailable')}
                     className={`py-2 px-1 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 transition active:scale-95 ${
-                      activeUserVote?.status === 'unavailable'
+                      draftVote === 'unavailable'
                         ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-2 ring-rose-600'
                         : 'bg-white hover:bg-rose-50 text-slate-700 border border-slate-200 hover:border-rose-300'
                     }`}
@@ -501,10 +536,73 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                 </div>
               </div>
 
+              {/* Requirement 4: Dropdown Details Event */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
+                <button
+                  type="button"
+                  onClick={() => setIsDetailsOpen(!isDetailsOpen)}
+                  className="w-full p-3 flex items-center justify-between text-xs font-bold text-slate-700 hover:bg-slate-100/60 transition"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Info className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Rincian & Konfirmasi Event</span>
+                  </span>
+                  {isDetailsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+
+                {isDetailsOpen && (
+                  <div className="p-3 pt-0 border-t border-slate-200/60 space-y-3 bg-white animate-in fade-in duration-150">
+                    <div className="pt-2 text-[11px] text-slate-500 space-y-1">
+                      <p><strong className="text-slate-700">Waktu:</strong> {selectedCandidate.timeSlot === 'morning' ? 'Pagi' : selectedCandidate.timeSlot === 'afternoon' ? 'Siang' : selectedCandidate.timeSlot === 'evening' ? 'Malam' : 'Seharian'}</p>
+                      <p><strong className="text-slate-700">Status Kehadiran Anda saat ini:</strong> {committedUserVote ? committedUserVote.status : 'Belum memilih'}</p>
+                    </div>
+
+                    {/* Button to commit vote explicitly inside dropdown details */}
+                    <button
+                      type="button"
+                      disabled={!draftVote}
+                      onClick={handleCommitVote}
+                      className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-98 ${
+                        hasUnsavedChanges
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
+                          : isSavedFeedback
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {isSavedFeedback ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Kehadiran Tersimpan!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{hasUnsavedChanges ? 'Simpan Pilihan Kehadiran' : 'Perbarui Kehadiran'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Save button if user hasn't opened dropdown details */}
+              {hasUnsavedChanges && !isDetailsOpen && (
+                <button
+                  type="button"
+                  onClick={handleCommitVote}
+                  className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition active:scale-98 animate-pulse"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Simpan Pilihan Kehadiran</span>
+                </button>
+              )}
+
               {/* Admin Approval Button (Sets YAY!) */}
               {!isSelectedApprovedWinner && (
-                <div className="pt-2">
+                <div className="pt-1">
                   <button
+                    type="button"
                     onClick={() => handleApproveDate(selectedCandidate)}
                     className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition"
                   >
@@ -518,6 +616,7 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
               {isSelectedApprovedWinner && (
                 <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
+                    type="button"
                     onClick={() => downloadIcsFile(room, selectedCandidate)}
                     className="py-2 px-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition"
                   >
@@ -525,6 +624,7 @@ export const SharedCalendarView: React.FC<SharedCalendarViewProps> = ({ room, ac
                     <span>.ICS</span>
                   </button>
                   <button
+                    type="button"
                     onClick={() => window.open(getGoogleCalendarUrl(room, selectedCandidate), '_blank')}
                     className="py-2 px-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition"
                   >

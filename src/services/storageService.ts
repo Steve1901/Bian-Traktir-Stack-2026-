@@ -100,6 +100,62 @@ export function createSeedRoom(): Room {
   };
 }
 
+export function createSeedRooms(): Room[] {
+  const room1 = createSeedRoom();
+
+  const today = new Date();
+  const makeDateStr = (daysAhead: number) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() + daysAhead);
+    return d.toISOString().split('T')[0];
+  };
+
+  const room2: Room = {
+    id: 'room-bem-kmf-2026',
+    token: 'BEM-KMF',
+    name: 'Rapat Divisi Acara BEM 2026',
+    description: 'Koordinasi rundown dan penanggung jawab per pos acara tahunan.',
+    adminId: 'fabian-1',
+    adminName: 'Fabian Alvaro Muhammad',
+    createdAt: Date.now() - 86400000 * 4,
+    members: [
+      {
+        id: 'fabian-1',
+        name: 'Fabian Alvaro Muhammad',
+        role: 'admin',
+        isMustAttend: true,
+        avatarColor: 'bg-blue-600',
+        joinedAt: Date.now() - 86400000 * 4,
+      },
+      {
+        id: 'stevanus-3',
+        name: 'Stevanus Herdi Pamungkas',
+        role: 'member',
+        isMustAttend: false,
+        avatarColor: 'bg-purple-600',
+        joinedAt: Date.now() - 86400000 * 3,
+      },
+    ],
+    candidateDates: [
+      { id: 'bem-1', date: makeDateStr(1), label: 'Sesi Awal' },
+      { id: 'bem-2', date: makeDateStr(4), label: 'Rapat Finalisasi' },
+    ],
+    votes: {
+      'bem-1': [
+        { memberId: 'fabian-1', memberName: 'Fabian Alvaro Muhammad', dateId: 'bem-1', status: 'available', updatedAt: 1 },
+        { memberId: 'stevanus-3', memberName: 'Stevanus Herdi Pamungkas', dateId: 'bem-1', status: 'available', updatedAt: 1 },
+      ],
+    },
+    criteria: {
+      minTurnoutPercentage: 50,
+      mustAttendMemberIds: ['fabian-1'],
+    },
+    status: 'VOTING',
+  };
+
+  return [room1, room2];
+}
+
 class StorageService {
   private rooms: Map<string, Room> = new Map();
   private listeners: Set<() => void> = new Set();
@@ -116,14 +172,14 @@ class StorageService {
         this.rooms.clear();
         parsed.forEach((r) => this.rooms.set(r.token.toUpperCase(), r));
       } else {
-        // First run: seed with sample room
-        const seed = createSeedRoom();
-        this.rooms.set(seed.token.toUpperCase(), seed);
+        // First run: seed with sample rooms
+        const seeds = createSeedRooms();
+        seeds.forEach((s) => this.rooms.set(s.token.toUpperCase(), s));
         this.saveToStorage();
       }
     } catch {
-      const seed = createSeedRoom();
-      this.rooms.set(seed.token.toUpperCase(), seed);
+      const seeds = createSeedRooms();
+      seeds.forEach((s) => this.rooms.set(s.token.toUpperCase(), s));
     }
   }
 
@@ -299,10 +355,10 @@ class StorageService {
 
   public resetDemoData() {
     this.rooms.clear();
-    const seed = createSeedRoom();
-    this.rooms.set(seed.token.toUpperCase(), seed);
+    const seeds = createSeedRooms();
+    seeds.forEach((s) => this.rooms.set(s.token.toUpperCase(), s));
     this.saveToStorage();
-    this.setActiveUser(seed.members[0]);
+    this.setActiveUser(seeds[0].members[0]);
   }
 
   // Active User session helpers
